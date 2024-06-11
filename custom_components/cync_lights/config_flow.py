@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required("username"): str,
-        vol.Required("password"): str,       
+        vol.Required("password"): str,
     }
 )
 STEP_TWO_FACTOR_CODE = vol.Schema(
@@ -29,6 +29,7 @@ async def cync_login(hub, user_input: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input"""
 
     response = await hub.authenticate(user_input["username"], user_input["password"])
+    _LOGGER.debug("cync_login() resp %s", response)
     if response['authorized']:
         return {'title':'cync_lights_'+ user_input['username'],'data':{'cync_credentials': hub.auth_code, 'user_input':user_input}}
     else:
@@ -41,6 +42,7 @@ async def submit_two_factor_code(hub, user_input: dict[str, Any]) -> dict[str, A
     """Validate the two factor code"""
 
     response = await hub.auth_two_factor(user_input["two_factor_code"])
+    _LOGGER.debug("submit_two_factor_code() resp %s", response)
     if response['authorized']:
         return {'title':'cync_lights_'+ hub.username,'data':{'cync_credentials': hub.auth_code, 'user_input': {'username':hub.username,'password':hub.password}}}
     else:
@@ -69,13 +71,12 @@ class CyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         try:
             info = await cync_login(self.cync_hub, user_input)
-            info["data"]["cync_config"] = await self.cync_hub.get_cync_config()
         except TwoFactorCodeRequired:
             return await self.async_step_two_factor_code()
         except InvalidAuth:
             errors["base"] = "invalid_auth"
         except Exception as e:  # pylint: disable=broad-except
-            _LOGGER.error(str(type(e).__name__) + ": " + str(e))
+            _LOGGER.warning("Unexpected exception from login", exc_info=e)
             errors["base"] = "unknown"
         else:
             self.data = info
@@ -98,11 +99,10 @@ class CyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         try:
             info = await submit_two_factor_code(self.cync_hub, user_input)
-            info["data"]["cync_config"] = await self.cync_hub.get_cync_config()
         except InvalidAuth:
             errors["base"] = "invalid_auth"
         except Exception as e:  # pylint: disable=broad-except
-            _LOGGER.error(str(type(e).__name__) + ": " + str(e))
+            _LOGGER.warning("Unexpected exception from two-factor", exc_info=e)
             errors["base"] = "unknown"
         else:
             self.data = info
@@ -121,6 +121,7 @@ class CyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self.options = user_input
             return await self._async_finish_setup()
 
+        self.data["data"]["cync_config"] = await self.cync_hub.get_cync_config()
         switches_data_schema = vol.Schema(
             {
                 vol.Optional(
@@ -145,7 +146,7 @@ class CyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ): cv.multi_select({device_id : f'{device_info["name"]} ({device_info["room_name"]}:{device_info["home_name"]})' for device_id,device_info in self.data["data"]["cync_config"]["devices"].items() if device_info.get('AMBIENT_LIGHT',False)}),
             }
         )
-        
+
         return self.async_show_form(step_id="select_switches", data_schema=switches_data_schema)
 
     async def _async_finish_setup(
@@ -154,7 +155,7 @@ class CyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Finish setup and create entry"""
 
         existing_entry = await self.async_set_unique_id(self.data['title'])
-        if not existing_entry:              
+        if not existing_entry:
             return self.async_create_entry(title=self.data["title"], data=self.data["data"], options=self.options)
         else:
             self.hass.config_entries.async_update_entry(existing_entry, data=self.data['data'], options=self.options)
@@ -211,7 +212,7 @@ class CyncOptionsFlowHandler(config_entries.OptionsFlow):
         except InvalidAuth:
             errors["base"] = "invalid_auth"
         except Exception as e:  # pylint: disable=broad-except
-            _LOGGER.error(str(type(e).__name__) + ": " + str(e))
+            _LOGGER.exception(e)
             errors["base"] = "unknown"
         else:
             self.data = info
@@ -234,7 +235,7 @@ class CyncOptionsFlowHandler(config_entries.OptionsFlow):
         except InvalidAuth:
             errors["base"] = "invalid_auth"
         except Exception as e:  # pylint: disable=broad-except
-            _LOGGER.error(str(type(e).__name__) + ": " + str(e))
+            _LOGGER.exception(e)
             errors["base"] = "unknown"
         else:
             self.data = info
